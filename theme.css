@@ -10,3 +10,15 @@
 .card-number{z-index:0;pointer-events:none}
 .guide-card>svg,.guide-card>.card-kicker,.guide-card>strong,.guide-card>.card-caption{position:relative;z-index:1}
 @media(max-width:420px){.guide-card{padding:16px 9px}.guide-card strong{font-size:11px;white-space:normal}.card-caption{font-size:9px}.header-caption{display:none}.narrative h1{font-size:26px}}
+
+/* The output state stays visible while scrolling through rules and statistics. */
+.output-overview{position:sticky;top:12px;z-index:40;display:flex;align-items:center;gap:14px;padding:16px 20px;margin-bottom:12px;border:1px solid #8191aa66;border-radius:14px;background:#162131;box-shadow:0 8px 28px #0005;color:#d3dce9}
+.output-light{flex:0 0 12px;width:12px;height:12px;border-radius:50%;background:currentColor}
+.output-overview-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}
+.output-overview-copy strong{font-size:18px;line-height:1.4}.output-overview-copy span{font-size:12px;line-height:1.6;color:#d3dce9;overflow-wrap:anywhere}
+.output-overview[data-state=ready]{background:#122e29;border-color:#82e0b9;color:#a2f1cb}
+.output-overview[data-state=blocked]{background:#302719;border-color:#e5bd78;color:#ffda9b}
+.output-overview[data-state=running]{background:#3a1f29;border-color:#ff96ae;color:#ffb0c3}
+.output-overview-link{flex:none;color:inherit;text-decoration:underline;text-underline-offset:4px;font-size:12px;padding:8px 0}
+#armOutputBtn{scroll-margin-top:160px}
+@media(max-width:700px){.output-overview{top:8px;padding:12px;gap:10px;flex-wrap:wrap}.output-overview-copy strong{font-size:16px}.output-overview-link{margin-left:22px;padding:0}.output-overview-copy{flex-basis:calc(100% - 26px)}}

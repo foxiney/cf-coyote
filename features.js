@@ -100,7 +100,29 @@ document.getElementById('endPractice').onclick = () => changePractice('stop').ca
 document.getElementById('allSubmissions').onclick = () => changePractice('all').catch(reportError);
 const LOG_LABELS = { simulated: '模拟', executed: '已输出', skipped: '跳过', ignored: '忽略',
     log: '记录', accepted: 'AC', pending: '待处理', error: '错误', session: '会话' };
+let pendingLogRows = [];
+let latestTrigger = null, latestSyncError = '';
+function renderLatestTrigger() {
+    const latest = latestTrigger;
+    const stale = latest?.status === 'pending' && Date.now() - latest.ts > 15000;
+    const text = latestSyncError ? `同步失败 → 等待重试：${latestSyncError}` : latest
+        ? `最近触发 ${new Date(latest.ts).toLocaleTimeString()}：${latest.verdict || '事件'} → ${stale ? '已过期 · 未及时处理，不补发' : (LOG_LABELS[latest.status] || latest.status) + ' · ' + (latest.reason || '')}`
+        : '最近触发：暂无记录';
+    const label = document.getElementById('latestTriggerResult');
+    if (label.textContent !== text) label.textContent = text;
+}
+function refreshPendingLogRows() {
+    renderLatestTrigger();
+    pendingLogRows = pendingLogRows.filter(({ row, entry, text }) => {
+        if (Date.now() - entry.ts <= 15000) return true;
+        row.textContent = text(true);
+        return false;
+    });
+}
 function renderEventLog(entries = []) {
+    latestTrigger = entries.find(entry => entry.status !== 'session');
+    renderLatestTrigger();
+    pendingLogRows = [];
     const box = document.getElementById('zapLog');
     box.replaceChildren();
     if (!entries.length) { box.textContent = '暂无事件，选择一种判题并点击模拟测试。'; return; }
@@ -108,13 +130,16 @@ function renderEventLog(entries = []) {
         const row = document.createElement('div'); row.className = 'ac-item';
         const power = entry.power == null ? '' : ` · 强度 ${entry.power}`;
         const stale = entry.status === 'pending' && Date.now() - entry.ts > 15000;
-        row.textContent = `${new Date(entry.ts).toLocaleTimeString()} [${stale ? '已过期' : LOG_LABELS[entry.status] || entry.status}] ` +
+        const text = stale => `${new Date(entry.ts).toLocaleTimeString()} [${stale ? '已过期' : LOG_LABELS[entry.status] || entry.status}] ` +
             `${entry.verdict || ''}${entry.subId ? ' #' + entry.subId : ''}${power} · ${stale ? '未在有效期内处理，不补发' : entry.reason || ''}`;
+        row.textContent = text(stale);
+        if (entry.status === 'pending' && !stale) pendingLogRows.push({ row, entry, text });
         box.append(row);
     }
 }
 document.getElementById('clearLog').onclick = () => featureRequest('CLEAR_LOG').catch(reportError);
-const featureReady = chrome.storage.local.get(['automation', 'practice', 'eventLog']).then(d => {
+const featureReady = chrome.storage.local.get(['automation', 'practice', 'eventLog', 'monitorError']).then(d => {
+    latestSyncError = d.monitorError || '';
     applyAutomation(d.automation); currentPractice = d.practice; renderPractice(); renderEventLog(d.eventLog);
     if (d.practice?.contestId) document.getElementById('contestId').value = d.practice.contestId;
 });
@@ -124,8 +149,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.practice) { cancelOutput(); currentPractice = changes.practice.newValue; renderPractice(); }
     if (changes.policyRevision) cancelOutput();
     if (changes.eventLog) renderEventLog(changes.eventLog.newValue);
+    if (changes.monitorError) { latestSyncError = changes.monitorError.newValue || ''; renderLatestTrigger(); }
 });
 setInterval(() => {
+    refreshPendingLogRows();
     if (currentPractice?.active && Date.now() >= currentPractice.endsAt) {
         currentPractice = { ...currentPractice, active: false };
         cancelOutput();

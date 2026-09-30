@@ -42,8 +42,8 @@ async function setAccount(value) {
     const { zapSeq = 0 } = await chrome.storage.local.get('zapSeq');
     await chrome.storage.local.set({
         cfHandle: user.handle, monitor: { cursor: latest[0]?.id || 0, pending: [] },
-        comboCount: 0, lastAcTs: Date.now(), zapAck: zapSeq, zapInfo: null,
-        zapStats: { date: new Date().toDateString(), count: 0 }, monitorError: '',
+        comboCount: 0, lastAcTs: 0, idleStartedAt: Date.now(), idleNextAt: 0, idleRetryPending: false, zapAck: zapSeq, zapInfo: null,
+        zapStats: { date: new Date().toDateString(), count: 0 }, monitorError: '', lastPollTs: 0,
         practice: { enabled: old.practice?.enabled || false, active: false }, policyRevision: Date.now()
     });
     await chrome.storage.local.remove(['pendingSubs', 'lastSeenId']);
@@ -53,8 +53,8 @@ async function setAccount(value) {
 }
 async function pollAccount() {
     const state = await chrome.storage.local.get(['cfHandle', 'monitor', 'comboCount', 'zapSeq', 'panicUntil', 'automation', 'cfg', 'practice']);
-    if (!state.cfHandle || !state.monitor || Date.now() - lastPollAt < 15000) return;
-    if (!Coyote.sessionActive(state.practice)) return;
+    if (!state.cfHandle || !state.monitor || !Coyote.sessionActive(state.practice)) return 'inactive';
+    if (Date.now() - lastPollAt < 15000) return 'throttled';
     lastPollAt = Date.now();
     try {
         const subs = (await cfApi('user.status', { handle: state.cfHandle, from: 1, count: 1000 })).result;
@@ -93,28 +93,69 @@ async function pollAccount() {
         }
         const patch = { monitor: { cursor, pending: [...pending] }, comboCount: combo,
             monitorError: '', lastPollTs: Date.now() };
-        if (ac) patch.lastAcTs = Date.now();
+        if (ac) Object.assign(patch, { lastAcTs: Date.now(), idleStartedAt: Date.now(), idleNextAt: 0, idleRetryPending: false });
         await chrome.storage.local.set(patch);
         if (failure) await dispatchEvent(failure);
+        return 'success';
     } catch (error) {
         await chrome.storage.local.set({ monitorError: error.message });
         throw error;
     }
 }
 async function idleTick() {
-    const d = await chrome.storage.local.get(['cfg', 'cfHandle', 'lastAcTs', 'panicUntil', 'zapSeq', 'practice']);
+    const d = await chrome.storage.local.get(['cfg', 'cfHandle', 'lastAcTs', 'idleStartedAt', 'idleNextAt', 'panicUntil', 'zapSeq', 'practice', 'lastPollTs', 'monitorError', 'automation', 'lastSimTs', 'lastZapTs']);
     if (!d.cfHandle || !d.cfg?.idleEnabled || !Coyote.sessionActive(d.practice)) return;
     const now = Date.now();
-    const duration = Math.max(5, Math.min(240, Number(d.cfg.idleMinutes) || 30)) * 60000;
-    if (!d.lastAcTs) { await chrome.storage.local.set({ lastAcTs: now }); return; }
-    if (now - d.lastAcTs < duration) return;
-    await chrome.storage.local.set({ lastAcTs: now });
-    await dispatchEvent({ subId: '--', verdict: `idle ${duration / 60000}min no AC`, combo: 1, ts: now, handle: d.cfHandle });
+    // A throttled poll is not proof that the most recent API request succeeded.
+    if (d.monitorError || !d.lastPollTs || now < d.lastPollTs || now - d.lastPollTs > 15000) return;
+    const duration = Math.max(1, Math.min(240, Number(d.cfg.idleMinutes) || 30)) * 60000;
+    const startedAt = d.idleStartedAt || d.lastAcTs || now;
+    const nextAt = d.idleNextAt || startedAt + duration;
+    if (!d.idleStartedAt || !d.idleNextAt) await chrome.storage.local.set({ idleStartedAt: startedAt, idleNextAt: nextAt });
+    if (now < nextAt) return;
+    const simulation = Coyote.automation(d.automation).simulation;
+    const blocked = Coyote.blocked(d, simulation);
+    const info = { subId: '--', verdict: `无 AC 到期（${duration / 60000} 分钟）`, trigger: 'idle', combo: 1, ts: now, handle: d.cfHandle };
+    if (blocked === '冷却中' && d.cfg.idleCooldownAction === 'retry') {
+        const retryAt = (simulation ? d.lastSimTs : d.lastZapTs) + Coyote.clamp(d.cfg.cdSeconds ?? 60, 0, 600) * 1000;
+        await chrome.storage.local.set({ idleNextAt: retryAt, idleLastAttemptAt: now, idleRetryPending: true });
+        await appendLog({ ...info, status: 'skipped', reason: `冷却剩余 ${Math.ceil((retryAt - now) / 1000)} 秒；到期后重新同步检查，不补发旧事件` });
+        return;
+    }
+    await chrome.storage.local.set({ idleStartedAt: now, idleNextAt: now + duration, idleLastAttemptAt: now, idleRetryPending: false });
+    await dispatchEvent(info);
+}
+async function setCfg(value = {}) {
+    const { cfg = {} } = await chrome.storage.local.get('cfg');
+    const allowed = ['strength', 'useA', 'useB', 'comboStep', 'idleEnabled', 'idleMinutes', 'cdSeconds', 'idleCooldownAction'];
+    const next = { ...cfg, ...Object.fromEntries(Object.entries(value).filter(([key]) => allowed.includes(key))) };
+    next.idleMinutes = Coyote.clamp(next.idleMinutes ?? 30, 1, 240, 30);
+    next.cdSeconds = Coyote.clamp(next.cdSeconds ?? 60, 0, 600, 60);
+    next.idleCooldownAction = next.idleCooldownAction === 'retry' ? 'retry' : 'skip';
+    const reset = next.idleEnabled !== cfg.idleEnabled || next.idleMinutes !== (cfg.idleMinutes ?? 30);
+    const patch = { cfg: next };
+    if (reset) Object.assign(patch, { idleStartedAt: Date.now(), idleNextAt: Date.now() + next.idleMinutes * 60000, idleRetryPending: false });
+    else if (next.cdSeconds !== (cfg.cdSeconds ?? 60) || next.idleCooldownAction !== (cfg.idleCooldownAction || 'skip')) patch.idleNextAt = 0;
+    await chrome.storage.local.set(patch);
+    return next;
+}
+async function clearIdleRetry() {
+    const { idleRetryPending, cfg } = await chrome.storage.local.get(['idleRetryPending', 'cfg']);
+    if (idleRetryPending) await chrome.storage.local.set({ idleRetryPending: false, idleStartedAt: Date.now(),
+        idleNextAt: Date.now() + Coyote.clamp(cfg?.idleMinutes ?? 30, 1, 240) * 60000 });
+}
+async function monitorTick() {
+    await expirePractice();
+    const result = await pollAccount();
+    if (result === 'success' || result === 'throttled') await idleTick();
+    return result;
 }
 chrome.runtime.onMessage.addListener((request, sender, reply) => {
     const consolePage = sender.url === chrome.runtime.getURL('control.html');
     let work;
-    if (request.action === 'POLL_ACCOUNT') work = serialize(pollAccount);
+    if (request.action === 'POLL_ACCOUNT') work = serialize(monitorTick);
+    else if (consolePage && request.action === 'SET_CFG') work = serialize(() => setCfg(request.value));
+    else if (consolePage && request.action === 'CLEAR_IDLE_RETRY') work = serialize(clearIdleRetry);
     else if (consolePage && request.action === 'SET_ACCOUNT') work = serialize(() => setAccount(request.handle));
     else if (consolePage && request.action === 'SET_AUTOMATION') work = serialize(() => setAutomation(request.value));
     else if (consolePage && request.action === 'PRACTICE') work = serialize(() => setPractice(request));
@@ -136,11 +177,7 @@ chrome.action.onClicked.addListener(async () => {
 });
 chrome.alarms.onAlarm.addListener(alarm => {
     if (alarm.name === 'practiceEnd') serialize(expirePractice).catch(console.error);
-    if (alarm.name === 'pollAccount') serialize(async () => {
-        await expirePractice();
-        await pollAccount();
-        await idleTick();
-    }).catch(console.error);
+    if (alarm.name === 'pollAccount') serialize(monitorTick).catch(console.error);
 });
 async function initialize() {
     await chrome.alarms.clear('pollPending');
@@ -149,7 +186,15 @@ async function initialize() {
     const { practice } = await chrome.storage.local.get('practice');
     if (practice?.active) await chrome.alarms.create('practiceEnd', { when: practice.endsAt });
     const { cfHandle, monitor } = await chrome.storage.local.get(['cfHandle', 'monitor']);
-    if (cfHandle && monitor) await chrome.alarms.create('pollAccount', { periodInMinutes: 1 });
+    if (cfHandle && monitor) {
+        const { idleStartedAt, lastAcTs } = await chrome.storage.local.get(['idleStartedAt', 'lastAcTs']);
+        // Legacy lastAcTs also held timer resets, so it cannot be labelled as an actual AC.
+        if (idleStartedAt == null) await chrome.storage.local.set({ idleStartedAt: lastAcTs || Date.now(), lastAcTs: 0, idleNextAt: 0, idleRetryPending: false });
+    }
+    // Worker restarts must not postpone the existing alarm's next firing time.
+    if (cfHandle && monitor && !(await chrome.alarms.get('pollAccount'))) {
+        await chrome.alarms.create('pollAccount', { periodInMinutes: 1 });
+    }
 }
 serialize(initialize).catch(console.error);
 
@@ -177,7 +222,10 @@ async function dispatchEvent(info, forceSimulation = false) {
     const rule = policy.rules[info.verdictCode] || {};
     const power = Coyote.power(d.cfg, rule, info.combo);
     const reason = Coyote.blocked(d, simulation) || (power <= 0 ? '强度为 0' : '');
-    if (reason) return appendLog({ ...info, simulation, power, status: 'skipped', reason });
+    if (reason) {
+        const detail = reason === '冷却中' ? `冷却剩余 ${Math.ceil(((simulation ? d.lastSimTs : d.lastZapTs) + Coyote.clamp(d.cfg?.cdSeconds ?? 60, 0, 600) * 1000 - Date.now()) / 1000)} 秒` : reason;
+        return appendLog({ ...info, simulation, power, status: 'skipped', reason: detail + (info.trigger === 'idle' ? '；本轮跳过，重新计时' : '') });
+    }
     if (simulation) {
         await chrome.storage.local.set({ lastSimTs: Date.now() });
         return appendLog({ ...info, simulation: true, power, status: 'simulated', reason: '模拟模式：未发送蓝牙输出' });
@@ -188,6 +236,7 @@ async function dispatchEvent(info, forceSimulation = false) {
     return event;
 }
 async function setAutomation(value) {
+    await clearIdleRetry();
     const { zapSeq = 0, policyRevision = 0 } = await chrome.storage.local.get(['zapSeq', 'policyRevision']);
     await chrome.storage.local.set({ automation: Coyote.automation(value), policyRevision: policyRevision + 1,
         zapAck: zapSeq, zapInfo: null });
@@ -211,7 +260,7 @@ async function setPractice(request) {
                 endsAt: startedAt + minutes * 60000, id: `${startedAt}-${contestId}` };
         }
     }
-    await chrome.storage.local.set({ practice, monitor, comboCount: 0, lastAcTs: Date.now(),
+    await chrome.storage.local.set({ practice, monitor, comboCount: 0, lastAcTs: 0, idleStartedAt: Date.now(), idleNextAt: 0, idleRetryPending: false, lastPollTs: 0,
         zapAck: d.zapSeq || 0, zapInfo: null, policyRevision: (d.policyRevision || 0) + 1 });
     await chrome.alarms.clear('practiceEnd');
     if (practice.active) await chrome.alarms.create('practiceEnd', { when: practice.endsAt });

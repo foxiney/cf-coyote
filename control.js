@@ -134,44 +134,49 @@ document.getElementById('langBtn').onclick = () => {
 chrome.storage.local.get('lang', d => { lang = d.lang || 'zh'; applyLang(); });
 
 // ---------- 设置持久化 ----------
-function saveCfg() {
-    chrome.storage.local.set({
-        cfg: {
-            strength: +slider.value,
-            useA: chanA.checked,
-            useB: chanB.checked,
-            comboStep: Math.max(0, Math.min(20, +comboStepInput.value || 0)),
-            idleEnabled: idleEnabledInput.checked,
-            idleMinutes: Math.max(5, Math.min(240, +idleMinutesInput.value || 30)),
-            cdSeconds: Math.max(0, Math.min(600, +cdSecondsInput.value || 0))
-        }
-    });
+function saveCfg(group = 'output') {
+    const scheduling = group === 'schedule';
+    if (!scheduling) cancelOutput();
+    const value = scheduling ? {
+        idleEnabled: idleEnabledInput.checked,
+        idleMinutes: Math.max(1, Math.min(240, +idleMinutesInput.value || 30)),
+        cdSeconds: Math.max(0, Math.min(600, +cdSecondsInput.value || 0)),
+        idleCooldownAction: document.getElementById('idleCooldownAction').value
+    } : {
+        strength: +slider.value, useA: chanA.checked, useB: chanB.checked,
+        comboStep: Math.max(0, Math.min(20, +comboStepInput.value || 0))
+    };
+    return featureRequest('SET_CFG', { value }).then(() => {
+        document.getElementById('settingsStatus').textContent = scheduling
+            ? '调度设置已保存，输出启用状态保留；开启计时或修改时长从现在重新计时。'
+            : '输出参数已保存，请重新启用输出。';
+    }).catch(reportError);
+}
+function outputCfgChanged(before = {}, after = {}) {
+    return ['strength', 'useA', 'useB', 'comboStep'].some(key =>
+        (before[key] ?? ({ strength: 20, useA: true, useB: true, comboStep: 5 })[key]) !==
+        (after[key] ?? ({ strength: 20, useA: true, useB: true, comboStep: 5 })[key]));
+}
+function applyCfg(cfg = {}) {
+    slider.value = cfg.strength ?? 20;
+    strengthVal.innerText = slider.value;
+    chanA.checked = cfg.useA ?? true;
+    chanB.checked = cfg.useB ?? true;
+    comboStepInput.value = cfg.comboStep ?? 5;
+    idleEnabledInput.checked = cfg.idleEnabled ?? false;
+    idleMinutesInput.value = cfg.idleMinutes ?? 30;
+    cdSecondsInput.value = cfg.cdSeconds ?? 60;
+    document.getElementById('idleCooldownAction').value = cfg.idleCooldownAction || 'skip';
 }
 chrome.storage.local.get(['cfg', 'comboCount'], ({ cfg, comboCount }) => {
-    if (cfg) {
-        slider.value = cfg.strength ?? 20;
-        strengthVal.innerText = slider.value;
-        chanA.checked = cfg.useA ?? true;
-        chanB.checked = cfg.useB ?? true;
-        comboStepInput.value = cfg.comboStep ?? 5;
-        idleEnabledInput.checked = cfg.idleEnabled ?? false;
-        idleMinutesInput.value = cfg.idleMinutes ?? 30;
-        cdSecondsInput.value = cfg.cdSeconds ?? 60;
-    }
+    applyCfg(cfg);
     updateComboUI(comboCount || 0);
 });
 slider.oninput = function () { strengthVal.innerText = this.value; saveCfg(); updateComboUIFromStorage(); };
 chanA.onchange = chanB.onchange = saveCfg;
 comboStepInput.onchange = () => { saveCfg(); updateComboUIFromStorage(); };
-idleMinutesInput.onchange = saveCfg;
-cdSecondsInput.onchange = saveCfg;
-idleEnabledInput.onchange = () => {
-    // 开启时把"上次AC时间"锚定为现在，避免立刻被电
-    if (idleEnabledInput.checked) {
-        chrome.storage.local.set({ lastAcTs: Date.now() });
-    }
-    saveCfg();
-};
+idleMinutesInput.onchange = cdSecondsInput.onchange = idleEnabledInput.onchange = () => saveCfg('schedule');
+document.getElementById('idleCooldownAction').onchange = () => saveCfg('schedule');
 
 // ---------- 连败 Combo ----------
 // 连败惩罚：基础强度 + 每连败一场 +step（可配置），递增封顶 5 档，总上限 100
@@ -361,6 +366,7 @@ function fmtHMS(ms) {
         : `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+let lastIdleDueAnchor = null;
 setInterval(() => {
     // 比赛倒计时
     if (nextContestStart) {
@@ -375,12 +381,17 @@ setInterval(() => {
         return;
     }
     box.classList.add('active');
-    chrome.storage.local.get('lastAcTs', ({ lastAcTs }) => {
-        const total = Math.max(5, Math.min(240, +idleMinutesInput.value || 30)) * 60000;
+    chrome.storage.local.get(['lastAcTs', 'idleStartedAt', 'idleNextAt'], ({ lastAcTs, idleStartedAt, idleNextAt }) => {
+        const total = Math.max(1, Math.min(240, +idleMinutesInput.value || 30)) * 60000;
         const elapsed = Date.now() - (lastAcTs || Date.now());
         const remain = total - elapsed;
+        const dueKey = `${lastAcTs}:${total}`;
+        if (remain <= 0 && lastAcTs && lastIdleDueAnchor !== dueKey) {
+            lastIdleDueAnchor = dueKey;
+            requestMonitorTick();
+        }
         const remainEl = document.getElementById('idleRemain');
-        remainEl.innerText = fmtHMS(remain);
+        remainEl.innerText = remain > 0 ? fmtHMS(remain) : '已到期 · 等待同步检查';
         remainEl.classList.toggle('urgent', remain < 5 * 60000);
         document.getElementById('idleBar').style.width =
             Math.max(0, Math.min(100, 100 * remain / total)) + '%';
@@ -389,6 +400,19 @@ setInterval(() => {
 
 syncCFStats();
 setInterval(syncCFStats, 300000);
+
+// The console must also drive monitoring when no Codeforces tab is open.
+let monitorBusy = false;
+async function requestMonitorTick() {
+    if (monitorBusy || !HANDLE) return;
+    monitorBusy = true;
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'POLL_ACCOUNT' });
+        if (!response?.ok) throw new Error(response?.error || '判题同步失败');
+    } catch (error) { reportError(error); }
+    finally { monitorBusy = false; }
+}
+setInterval(requestMonitorTick, 15000);
 
 // ---------- 蓝牙连接 ----------
 const connectionManager = new CoyoteConnection({
@@ -402,6 +426,8 @@ const connectionManager = new CoyoteConnection({
             document.getElementById('zapNotify').style.display = 'none';
         }
         if (state === 'disconnected' || state === 'error') {
+            writeEpoch++;
+            writeQueue = Promise.resolve();
             char = null;
             document.getElementById('deviceStrength').textContent = '设备未连接';
             document.getElementById('batteryLevel').textContent = '电量：未连接';
@@ -421,6 +447,35 @@ function updateConnectionUI() {
     arm.textContent = connectionManager.armed ? '关闭输出' : '启用输出（含自动触发）';
     arm.disabled = state !== 'connected' || simulationMode || isPanic() || !Coyote.sessionActive(currentPractice);
     document.getElementById('outputStatus').textContent = connectionManager.armed ? '输出已启用 · 仅处理启用后的新事件' : '输出未启用';
+    updateOutputOverview();
+}
+function updateOutputOverview() {
+    const reasons = [];
+    if (simulationMode) reasons.push('模拟模式：只记录，不输出');
+    if (connectionManager.state !== 'connected' || !char) {
+        reasons.push(({ connecting: '正在连接设备', disconnecting: '正在断开设备', error: '连接失败，请重试' })[connectionManager.state] || '设备未连接');
+    }
+    if (isPanic()) reasons.push('紧急停止生效中，需先解除暂停');
+    if (automationBusy || practiceChanging) reasons.push('正在保存规则或切换练习');
+    if (!Coyote.sessionActive(currentPractice)) reasons.push('练习未开始或已结束');
+    if (!chanA.checked && !chanB.checked) reasons.push('A/B 通道均已关闭');
+    const armed = connectionManager.armed;
+    const running = armed && !reasons.length && document.getElementById('zapNotify').style.display === 'block';
+    const cooldown = Math.max(0, Math.ceil((lastZapTs + Coyote.clamp(cdSecondsInput.value, 0, 600) * 1000 - Date.now()) / 1000));
+    let state = 'off', title = '输出未启用';
+    if (armed) {
+        state = reasons.length ? 'blocked' : running ? 'running' : cooldown ? 'blocked' : 'ready';
+        title = reasons.length ? '输出已启用 · 暂不可输出' : running ? '正在发送输出' : cooldown ? '输出已启用 · 冷却中' : '输出已启用 · 等待触发';
+    }
+    const reason = reasons.length ? reasons.join('；') : !armed ? '设备已就绪，点击「启用输出」后才会实际输出。'
+        : running ? '正在向设备发送指令；按 Esc 可紧急停止。'
+        : cooldown ? `冷却剩余 ${cooldown} 秒，到期后保持启用。`
+        : `通道 ${[chanA.checked && 'A', chanB.checked && 'B'].filter(Boolean).join(' / ')} · 可手动触发；自动输出仍遵守判题规则。`;
+    document.getElementById('outputOverview').setAttribute('data-state', state);
+    for (const [id, text] of [['outputOverviewTitle', title], ['outputOverviewReason', reason]]) {
+        const element = document.getElementById(id);
+        if (element.textContent !== text) element.textContent = text;
+    }
 }
 async function connectBle(device, isCurrent = () => true) {
     const server = await device.gatt.connect();
@@ -466,6 +521,7 @@ document.getElementById('armOutputBtn').onclick = async () => {
     const generation = outputGeneration;
     const d = await chrome.storage.local.get(['zapSeq', 'automation', 'practice', 'panicUntil']);
     if (Coyote.automation(d.automation).simulation || simulationMode || Date.now() < (d.panicUntil || 0) || !Coyote.sessionActive(d.practice)) return;
+    await featureRequest('CLEAR_IDLE_RETRY');
     await chrome.storage.local.set({ zapAck: d.zapSeq || 0 });
     if (generation !== outputGeneration) return;
     connectionManager.arm();
@@ -498,14 +554,30 @@ function buildPacket(pA, pB, useA, useB) {
 function clampPower(value) { return Math.max(0, Math.min(100, Math.round(Number(value) || 0))); }
 let outputGeneration = 0;
 let writeQueue = Promise.resolve();
+let writeEpoch = 0;
 let panicUntil = 0;
 let lastZapTs = 0;
 function isPanic() { return Date.now() < panicUntil; }
 function writePacket(connection, packet, generation = null) {
+    const epoch = writeEpoch;
     const job = writeQueue.then(async () => {
+        if (epoch !== writeEpoch || char !== connection) return false;
         if (generation !== null && (generation !== outputGeneration || !connectionManager.armed || isPanic() || simulationMode || automationBusy || practiceChanging || !Coyote.sessionActive(currentPractice) || char !== connection)) return false;
-        await connection.writeValue(packet);
-        return true;
+        let timer;
+        try {
+            await Promise.race([connection.writeValue(packet), new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('蓝牙写入超时，已关闭输出并断开连接')), 3000);
+            })]);
+            return true;
+        } catch (error) {
+            if (epoch === writeEpoch && char === connection) {
+                // A timed-out native write cannot be cancelled: close GATT before reuse.
+                // Do not await disconnect here; its stop request may be waiting on this job.
+                char = null;
+                connectionManager.disconnect().catch(reportError);
+            }
+            throw error;
+        } finally { clearTimeout(timer); }
     });
     writeQueue = job.catch(() => {});
     return job;
@@ -518,10 +590,11 @@ function cancelOutput() {
     return char ? writePacket(char, buildPacket(0, 0, false, false)).catch(reportError) : Promise.resolve();
 }
 async function executeZap(power) {
-    const connection = char, generation = outputGeneration;
+    const connection = char, generation = outputGeneration, epoch = writeEpoch;
     const useA = chanA.checked, useB = chanB.checked;
     if (!connection || !connectionManager.armed || simulationMode || automationBusy || practiceChanging || isPanic() || !Coyote.sessionActive(currentPractice) || (!useA && !useB)) return false;
     document.getElementById('zapNotify').style.display = 'block';
+    updateOutputOverview();
     let sent = false;
     try {
         for (let i = 0; i < 15; i++) {
@@ -531,8 +604,11 @@ async function executeZap(power) {
         }
         return sent;
     } finally {
-        try { await writePacket(connection, buildPacket(0, 0, false, false)); } catch (error) { reportError(error); }
-        document.getElementById('zapNotify').style.display = 'none';
+        if (epoch === writeEpoch) {
+            try { await writePacket(connection, buildPacket(0, 0, false, false)); } catch (error) { reportError(error); }
+            document.getElementById('zapNotify').style.display = 'none';
+            updateOutputOverview();
+        }
     }
 }
 // One lock across all extension control tabs, with durable event acknowledgement.
@@ -552,6 +628,8 @@ async function handleZap(manual = false) {
         const policy = Coyote.automation(d.automation);
         if (policy.simulation || simulationMode || automationBusy || practiceChanging) return false;
         let reason = !connectionManager.armed ? '输出尚未启用' : Coyote.blocked(d, false);
+        if (!reason && info.trigger === 'idle' && !d.cfg?.idleEnabled) reason = '无 AC 计时已关闭';
+        if (reason === '冷却中') reason = `冷却剩余 ${Math.ceil(((d.lastZapTs || 0) + Coyote.clamp(d.cfg?.cdSeconds ?? 60, 0, 600) * 1000 - Date.now()) / 1000)} 秒`;
         if (!manual && !reason && info.ts < connectionManager.armedAt) reason = '事件早于本次启用，不补发';
         if (!reason && !char) reason = '蓝牙未连接，不补发';
         if (!manual && !reason && (info.handle !== d.cfHandle || Date.now() - info.ts > 15000)) reason = '事件已过期或账号已切换';
@@ -577,6 +655,12 @@ async function handleZap(manual = false) {
 }
 chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (changes.cfg) {
+        if (outputCfgChanged(changes.cfg.oldValue, changes.cfg.newValue)) cancelOutput();
+        applyCfg(changes.cfg.newValue);
+        updateOutputOverview();
+        updateComboUIFromStorage();
+    }
     if (changes.cfHandle) { cancelOutput(); loadAccount().catch(reportError); }
     if (changes.panicUntil) {
         panicUntil = changes.panicUntil.newValue || 0;
@@ -587,6 +671,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     if (changes.comboCount) updateComboUI(changes.comboCount.newValue || 0);
     if (changes.zapStats) document.getElementById('todayZaps').textContent = changes.zapStats.newValue?.count || 0;
     if (changes.monitorError?.newValue) reportError(new Error(changes.monitorError.newValue));
+    if (changes.lastZapTs) { lastZapTs = changes.lastZapTs.newValue || 0; updateOutputOverview(); }
 });
 document.getElementById('testBtn').onclick = () => {
     if (simulationMode) { document.getElementById('simulateBtn').onclick(); return; }
@@ -608,6 +693,7 @@ document.addEventListener('keydown', event => {
 });
 window.addEventListener('pagehide', () => { connectionManager.disconnect().catch(reportError); });
 chrome.storage.local.get('panicUntil', d => { panicUntil = d.panicUntil || 0; updatePanicUI(); });
+chrome.storage.local.get('lastZapTs', d => { lastZapTs = d.lastZapTs || 0; updateOutputOverview(); });
 setInterval(updatePanicUI, 5000);
 loadAccount().catch(reportError);
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CF Coyote Punisher Pro",
-  "version": "1.9.0",
+  "version": "1.9.3",
   "action": {
     "default_title": "郊狼控制台"
   },
