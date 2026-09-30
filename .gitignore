@@ -11,3 +11,12 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+.codex/
+.agents/
+.venv/
+coverage/
+*.crx
+*.pem
+dist/
+GitHub发布准备/
+Desktop.ini
