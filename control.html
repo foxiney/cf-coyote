@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>COYOTE · 专注练习控制台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+    <div class="dashboard">
+        <header class="app-header"><a class="wordmark" href="#">◈ <span>COYOTE<span class="wordmark-dot">.</span></span></a><span class="header-caption">CODEFORCES × DG-LAB</span><span class="version-tag">V1.9 / STUDIO</span></header>
+        <section class="theater" aria-label="操作引导">
+            <div class="narrative"><span class="eyebrow">A LITTLE FOCUS. A BETTER FLOW.</span><h1>让每一次练习，<br><em>更有节奏。</em></h1><p id="guideNarrative" aria-live="polite">先验证你的 Codeforces 用户名，让新提交与练习数据在这里汇合。</p><div class="guide-navigation"><button id="guidePrev" aria-label="上一步">←</button><span id="guideIndex">01 / 03</span><button id="guideNext" aria-label="下一步">→</button><span class="guide-hint">点击卡片探索</span></div></div>
+            <div id="guideStage" class="guide-stage" tabindex="0" aria-label="三步操作引导，可使用左右方向键">
+                <button class="guide-card active" data-guide="0" aria-pressed="true"><span class="card-number">01</span><svg viewBox="0 0 80 80" aria-hidden="true"><path d="M22 48V34m18 22V23m18 25V16"/></svg><span class="card-kicker">SYNC</span><strong>同步你的练习</strong><span class="card-caption"><mark>只关注新提交</mark></span></button>
+                <button class="guide-card" data-guide="1" aria-pressed="false"><span class="card-number">02</span><svg viewBox="0 0 80 80" aria-hidden="true"><path d="M15 40h12l7-18 12 36 8-18h12"/></svg><span class="card-kicker">REHEARSE</span><strong>先模拟，再开始</strong><span class="card-caption"><mark>把规则调到合适</mark></span></button>
+                <button class="guide-card" data-guide="2" aria-pressed="false"><span class="card-number">03</span><svg viewBox="0 0 80 80" aria-hidden="true"><path d="M40 15v25m-15-17a25 25 0 1 0 30 0"/></svg><span class="card-kicker">CONNECT</span><strong>连接与输出分开</strong><span class="card-caption"><mark>每次启用，由你决定</mark></span></button>
+            </div>
+        </section>
+        <button id="langBtn" class="lang-btn">EN</button>
+        <div id="zapNotify" class="zap-notify">⚡ 放电中_</div>
+
+        <div class="user-section surface">
+            <div class="account-heading"><span class="eyebrow">YOUR CODEFORCES</span><div id="handleDisplay" class="handle">设置你的 Codeforces 账号</div></div>
+            <form id="accountForm" class="setting-row" style="margin:16px 0">
+                <label for="handleInput">Codeforces 用户名</label>
+                <input id="handleInput" class="num-input" style="width:220px;text-align:left" minlength="3" maxlength="24" required autocomplete="off" spellcheck="false" placeholder="例如 tourist">
+                <button id="saveHandle" type="submit" style="width:auto;margin:0;padding:8px 16px">验证并保存</button>
+            </form>
+            <div id="accountStatus" role="status" aria-live="polite" style="font-size:12px;color:var(--dim)">保存后仅监听新提交；切换账号会重置连败。</div>
+            <div id="rankTag" class="rank-label">FETCHING...</div>
+        </div>
+
+        <div id="modeBanner" class="mode-banner" role="status">模拟模式 · 只记录，不输出</div>
+        <div class="columns">
+            <!-- ===== 左栏：数据 ===== -->
+            <div class="overview-column">
+                <div class="panel-heading"><div><span class="eyebrow">YOUR PROGRESS</span><h2>练习概览</h2></div><span class="quiet-badge">最近提交</span></div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span id="totalSolved" class="stat-val">0</span>
+                        <span class="stat-desc" data-i18n="totalSolved">近 5000 次提交解题数</span>
+                    </div>
+                    <div class="stat-card">
+                        <span id="todayAC" class="stat-val" style="color: var(--green);">0</span>
+                        <span class="stat-desc" data-i18n="todayAc">今日 AC</span>
+                    </div>
+                    <div class="stat-card">
+                        <span id="currentRating" class="stat-val">----</span>
+                        <span class="stat-desc" data-i18n="rating">当前分数</span>
+                    </div>
+                </div>
+
+                <div class="section-tag" data-i18n="secStats">今日战况</div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span id="todaySubmits" class="stat-val">0</span>
+                        <span class="stat-desc" data-i18n="submits">提交</span>
+                    </div>
+                    <div class="stat-card">
+                        <span id="todayZaps" class="stat-val" style="color: var(--danger);">0</span>
+                        <span class="stat-desc" data-i18n="zaps">被电</span>
+                    </div>
+                    <div class="stat-card">
+                        <span id="acRate" class="stat-val" style="color: var(--amber);">--%</span>
+                        <span class="stat-desc" data-i18n="acRate">AC 率</span>
+                    </div>
+                </div>
+
+                <div class="section-tag" data-i18n="secChart">RATING 走势</div>
+                <div class="chart-box">
+                    <span id="chartDelta" class="chart-delta"></span>
+                    <svg id="ratingChart" viewBox="0 0 300 74" preserveAspectRatio="none"></svg>
+                </div>
+
+                <div class="section-tag" data-i18n="secAc">今日 AC 列表</div>
+                <div class="ac-list" id="acContainer" style="height: 86px;">
+                    <div style="color: #475569; font-size: 11px;" data-i18n="syncing">正在同步最新提交记录...</div>
+                </div>
+
+                <div class="section-tag" data-i18n="secDiff">难度分布</div>
+                <div class="diff-tags" id="diffTags">
+                    <span style="color:#475569; font-size:11px;" data-i18n="noDiff">暂无数据</span>
+                </div>
+
+                <div class="section-tag">指定比赛练习</div>
+                <form id="practiceForm" class="setting-card">
+                    <div class="setting-row">
+                        <label for="contestId">比赛 ID</label>
+                        <input id="contestId" class="num-input" style="width:100px" type="number" min="1" step="1" required placeholder="例如 2000">
+                        <label for="practiceMinutes">时长</label>
+                        <input id="practiceMinutes" class="num-input" type="number" min="1" max="480" step="1" value="60" required> 分钟
+                    </div>
+                    <div class="hint">仅处理会话开始后提交到该比赛的题目；结束后保持停止。比赛 ID 来自比赛链接中的数字。</div>
+                    <button id="startPractice" class="small-button" type="submit">开始 / 重新开始练习</button>
+                    <div class="button-row">
+                        <button id="endPractice" class="small-button" type="button">结束练习</button>
+                        <button id="allSubmissions" class="small-button" type="button">监控全部新提交</button>
+                    </div>
+                    <div id="sessionStatus" class="hint" role="status">正在读取会话…</div>
+                </form>
+                <div class="section-tag" data-i18n="secContest">下一场比赛</div>
+                <div class="contest-box">
+                    <span id="contestName" class="contest-name" data-i18n="noContest">加载中...</span>
+                    <span id="contestTimer" class="contest-timer">--:--:--</span>
+                </div>
+<section class="log-panel surface">                <div class="section-tag">事件日志 · 最近 100 条</div>
+                <button id="clearLog" class="small-button" type="button">清空日志</button>
+                <div class="ac-list" id="zapLog" style="height: 96px;">
+                    <div style="color: #475569; font-size: 11px;" data-i18n="noZap">暂无电击记录。</div>
+                </div></section>
+            </div>
+
+            <!-- ===== 右栏：惩罚控制台 ===== -->
+            <div class="control-column">
+                <section class="device-panel surface"><div class="panel-heading"><div><span class="eyebrow">DEVICE & OUTPUT</span><h2>设备控制</h2></div><span class="device-indicator" id="deviceBadge">未连接</span></div>                <div class="channel-controls">
+                    <label class="channel-label"><input type="checkbox" id="chanA" checked> <span data-i18n="chanAL">通道 A</span></label>
+                    <label class="channel-label"><input type="checkbox" id="chanB" checked> <span data-i18n="chanBL">通道 B</span></label>
+                </div>
+
+                <div class="button-row">
+                    <button id="connectBtn">连接郊狼 V3</button>
+                    <button id="disconnectBtn" class="small-button" disabled>断开设备</button>
+                </div>
+                <div id="connectionStatus" class="hint" role="status">设备未连接</div>
+                <button id="armOutputBtn" class="small-button" disabled>启用输出（含自动触发）</button>
+                <div id="outputStatus" class="hint" role="status">输出未启用</div>
+                <div id="batteryLevel" class="hint" role="status">电量：未连接</div>
+                <div id="deviceStrength" role="status" style="font-size:12px;color:var(--dim);margin-top:8px">设备未连接</div>
+                <button id="testBtn" data-i18n="test">手动触发</button>
+                <button id="panicBtn">🛑 紧急停止</button>
+
+                </section><div class="tuning-panel surface">
+                <div class="section-tag" style="margin-top: 0;" data-i18n="secPunish">输出参数</div>
+                <div class="gauge-row">
+                    <div id="strengthVal">20</div>
+                    <div class="gauge-meta" data-i18n="gaugeMeta">基础强度
+0 - 100</div>
+                </div>
+                <input type="range" id="strengthSlider" min="0" max="100" value="20">
+
+                <div class="combo-bar">
+                    <span>🔥 <span data-i18n="streak">连败</span> <b id="comboVal">0</b></span>
+                    <span id="nextPower">下次强度: 20</span>
+                </div>
+
+                <div class="settings">
+                    <div class="setting-card rules-card">
+                        <label class="setting-row"><input type="checkbox" id="simulationMode" checked> 模拟模式：不输出到设备</label>
+                        <div class="hint">关闭后进入实机模式，仍需单独启用输出；修改开关会同时保存下方规则。模拟与实机冷却分别计时。</div>
+                        <details class="rule-details"><summary>按判题配置规则 <span>WA / TLE / RE…</span></summary><div id="ruleList" class="settings"></div>
+                        <div class="hint">右侧为各判题的基础强度（0–100）；留空跟随上方滑块，之后仍应用连败递增。忽略不计连败。</div>
+                        <button id="saveRules" class="small-button" type="button">保存判题规则</button>
+                        <div id="ruleStatus" class="hint" role="status"></div></details>
+                        <div class="setting-row">
+                            <label for="simulateVerdict">测试判题</label><select id="simulateVerdict"></select>
+                        </div>
+                        <button id="simulateBtn" class="small-button" type="button">模拟测试（始终不输出）</button>
+                    </div>
+                    <div class="setting-card">
+                        <span class="label" data-i18n="comboStepL">连败递增</span>
+                        <div class="setting-row">
+                            +<input type="number" id="comboStep" class="num-input" min="0" max="20" value="5"> <span data-i18n="perLoss">/ 场</span>
+                        </div>
+                    </div>
+                    <div class="setting-card">
+                        <span class="label" data-i18n="cdL">冷却时间</span>
+                        <div class="setting-row">
+                            <input type="number" id="cdSeconds" class="num-input" min="0" max="600" value="60"> <span data-i18n="seconds">秒</span>
+                        </div>
+                    </div>
+                    <div class="setting-card">
+                        <span class="label" data-i18n="idleL">无 AC 惩罚</span>
+                        <div class="setting-row">
+                            <label class="switch">
+                                <input type="checkbox" id="idleEnabled">
+                                <span class="track"></span>
+                            </label>
+                            <input type="number" id="idleMinutes" class="num-input" min="5" max="240" value="30"> <span data-i18n="minutes">分钟</span>
+                        </div>
+                        <div class="idle-countdown" id="idleCountdown">
+                            <div class="idle-remain-row">
+                                <span id="idleRemainLabel" data-i18n="idleRemainL">距离惩罚</span>
+                                <span id="idleRemain">--:--</span>
+                            </div>
+                            <div class="idle-bar-track"><div id="idleBar"></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                </div>
+
+            </div>
+        </div>
+    </div>
+    <script src="core.js"></script>
+    <script src="features.js"></script>
+    <script src="connection.js"></script>
+    <script src="control.js"></script>
+    <script src="appearance.js"></script>
+</body>
+</html>

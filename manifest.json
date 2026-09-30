@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "CF Coyote Punisher Pro",
+  "version": "1.9.0",
+  "action": {
+    "default_title": "郊狼控制台"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://codeforces.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://codeforces.com/*",
+        "https://www.codeforces.com/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ]
+}

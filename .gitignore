@@ -1,0 +1,13 @@
+# Local development and release artifacts
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
+*.zip
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
