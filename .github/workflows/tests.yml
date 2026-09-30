@@ -1,0 +1,19 @@
+name: Tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check JavaScript syntax
+        run: |
+          for file in core.js background.js control.js connection.js features.js content.js appearance.js; do
+            node --check "$file" || exit 1
+          done
+      - name: Run mock regression tests
+        run: node --test tests/regression.cjs tests/connection.cjs
