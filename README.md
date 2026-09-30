@@ -119,6 +119,6 @@ python tests/preview_server.py
 
 ## 许可与致谢
 
-项目自身尚未指定开源许可证；公开源码不代表本项目已采用 MIT 等许可证。
-第三方设计参考的 MIT 许可仅适用于对应材料，参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目采用 [MIT 许可证](LICENSE)，Copyright (c) 2026 foxiney。
+第三方设计参考保留其原始版权署名与 MIT 许可，参见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 参考 Codeforces 公开 API 和 DG-LAB V3 协议。仓库保留 card-theater 设计参考及其原始许可证。
